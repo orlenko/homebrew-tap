@@ -1,0 +1,37 @@
+# orlenko/homebrew-tap — Cargo workspace for the tool factory.
+# Each tool is a member crate under tools/<name>/; shared glue lives in crates/.
+# The forge meta-tool is added as a member once it exists.
+[workspace]
+resolver = "3"
+members = ["crates/*", "tools/*"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+authors = ["Vlad Orlenko <vlad@orlenko.ca>"]
+homepage = "https://github.com/orlenko/homebrew-tap"
+repository = "https://github.com/orlenko/homebrew-tap"
+
+# Shared dependency pins. Tools opt in with `dep.workspace = true`.
+[workspace.dependencies]
+toolkit = { path = "crates/toolkit" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "macros",
+  "signal",
+  "time",
+  "fs",
+  "io-util",
+  "net",
+] }
+
+# Ship profile, standardized across every tool (mirrors himalaya's measured-good
+# settings). Deps dominate binary size, so opt-level stays at 3; reach for "z"
+# only if `cargo bloat` shows a real win.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

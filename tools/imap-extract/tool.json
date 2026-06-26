@@ -1,0 +1,10 @@
+{
+  "name": "imap-extract",
+  "lang": "rust",
+  "bin": "imap-extract",
+  "desc": "Watch an IMAP folder over IDLE and export new mail as Markdown",
+  "homepage": "https://github.com/orlenko/homebrew-tap",
+  "license": "MIT",
+  "targets": ["aarch64-apple-darwin"],
+  "test": "selftest"
+}

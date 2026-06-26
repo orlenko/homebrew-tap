@@ -1,0 +1,75 @@
+# Continuous integration. Runs on every PR and push to main, entirely on
+# GitHub-hosted macOS arm64 runners (free for public repos — no extra infra).
+# Rebuilds every workspace target, runs the unit tests, lints, and enforces that
+# the generated formulae were not hand-edited.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all --check
+
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build all targets
+        run: cargo build --workspace --all-targets
+
+      - name: Unit tests
+        run: cargo test --workspace
+
+      - name: Lint every tool manifest
+        run: |
+          shopt -s nullglob
+          for d in tools/*/; do
+            t="$(basename "$d")"
+            if [ -f "${d}tool.json" ]; then
+              cargo run -q -p forge -- lint "$t"
+            fi
+          done
+
+      - name: Formula drift-gate (generated, never hand-edited)
+        run: |
+          shopt -s nullglob
+          for rb in Formula/*.rb; do
+            t="$(basename "$rb" .rb)"
+            v="$(sed -nE 's/^[[:space:]]*version "([^"]+)".*/\1/p' "$rb" | head -1)"
+            u="$(sed -nE 's/^[[:space:]]*url "([^"]+)".*/\1/p' "$rb" | head -1)"
+            s="$(sed -nE 's/^[[:space:]]*sha256 "([^"]+)".*/\1/p' "$rb" | head -1)"
+            cargo run -q -p forge -- formula "$t" --version "$v" --url "$u" --sha256 "$s" --out /tmp/regen.rb
+            if ! diff -u "$rb" /tmp/regen.rb; then
+              echo "::error file=$rb::$rb is stale or hand-edited — formulae are generated; re-render via forge"
+              exit 1
+            fi
+          done
+
+  audit:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: brew audit the generated formulae
+        run: |
+          shopt -s nullglob
+          for rb in Formula/*.rb; do
+            brew audit --strict "$rb"
+          done

@@ -1,0 +1,19 @@
+# Rust
+/target
+**/target
+
+# Bun escape-hatch lane (later)
+**/node_modules
+
+# cargo-dist working dir
+/dist
+
+# macOS
+.DS_Store
+
+# Per-tool RUNTIME files — never commit secrets or per-mailbox sync state.
+# (.env.example IS committed; .env is not.)
+.env
+**/.env
+state.json
+**/state.json

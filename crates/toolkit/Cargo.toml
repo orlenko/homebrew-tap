@@ -1,0 +1,13 @@
+[package]
+name = "toolkit"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Shared glue for orlenko/homebrew-tap CLI tools: per-directory env config + TTY-aware logging"
+
+[dependencies]
+dotenvy = "0.15"
+jiff = "0.2"
