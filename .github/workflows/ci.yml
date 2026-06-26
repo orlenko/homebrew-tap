@@ -69,7 +69,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: brew audit the generated formulae
         run: |
+          # `brew audit <path>` is disabled — register this checkout as the tap
+          # and audit by name instead.
+          tap_dir="$(brew --repository)/Library/Taps/orlenko/homebrew-tap"
+          mkdir -p "$(dirname "$tap_dir")"
+          ln -sfn "$GITHUB_WORKSPACE" "$tap_dir"
           shopt -s nullglob
           for rb in Formula/*.rb; do
-            brew audit --strict "$rb"
+            name="$(basename "$rb" .rb)"
+            brew audit --strict "orlenko/tap/$name"
           done
