@@ -409,6 +409,26 @@ fn slugify(text: &str) -> String {
     collapsed.trim_matches('-').to_string()
 }
 
+/// Slugify a subject into a filename component, capped so the final filename
+/// stays under the 255-byte-per-component limit (macOS rejects longer names
+/// with ENAMETOOLONG / os error 63). slugify output is ASCII, so truncating by
+/// bytes never splits a char; we trim a dash left dangling at the cut.
+fn slug_for_filename(subject: &str) -> String {
+    const MAX_SLUG: usize = 80;
+    let mut s = slugify(subject);
+    if s.len() > MAX_SLUG {
+        s.truncate(MAX_SLUG);
+        while s.ends_with('-') {
+            s.pop();
+        }
+    }
+    if s.is_empty() {
+        "no-subject".to_string()
+    } else {
+        s
+    }
+}
+
 fn sanitize_filename(text: &str) -> String {
     text.chars()
         .map(|c| if "/\\:*?\"<>|\0".contains(c) { '_' } else { c })
@@ -475,14 +495,7 @@ async fn process_message(source: &[u8], target_dir: &Path, uid: u32, log: &Logge
     );
 
     let date_part = date_for_filename(msg.date());
-    let slug = {
-        let s = slugify(&subject);
-        if s.is_empty() {
-            "no-subject".to_string()
-        } else {
-            s
-        }
-    };
+    let slug = slug_for_filename(&subject);
     let base = format!("{date_part}_{uid}_{slug}");
 
     tokio::fs::create_dir_all(target_dir).await?;
@@ -659,6 +672,36 @@ mod tests {
         assert_eq!(slugify("  Multiple   Spaces "), "multiple-spaces");
         assert_eq!(slugify("UPPER_case-1"), "upper_case-1");
         assert_eq!(slugify("!!!"), "");
+    }
+
+    #[test]
+    fn slug_for_filename_caps_and_trims() {
+        let long = "word ".repeat(100); // ~500 chars
+        let s = slug_for_filename(&long);
+        assert!(s.len() <= 80, "len {}", s.len());
+        assert!(!s.ends_with('-'), "trailing dash: {s:?}");
+    }
+
+    #[test]
+    fn slug_for_filename_empty_fallback() {
+        assert_eq!(slug_for_filename(""), "no-subject");
+        assert_eq!(slug_for_filename("•••"), "no-subject"); // all dropped
+    }
+
+    #[test]
+    fn slug_for_filename_real_subject_stays_under_os_limit() {
+        // The exact subject that produced ENAMETOOLONG (os error 63) at UID 312.
+        let subject = "3465 Chemin de la Côte des Neiges - AVIS IMPORTANT - Élection \
+du conseil d'administration - Assemblée générale spéciale VIRTUELLE le 18 novembre \
+2024 / IMPORTANT NOTICE - Board members election - VIRTUAL general special meeting \
+on November 18th, 2024";
+        let slug = slug_for_filename(subject);
+        // Worst-case component: date(19) + "_" + uid(<=10) + "_" + slug + " attachments".
+        let worst = 19 + 1 + 10 + 1 + slug.len() + " attachments".len();
+        assert!(
+            worst < 255,
+            "worst-case filename component is {worst} bytes"
+        );
     }
 
     #[test]
