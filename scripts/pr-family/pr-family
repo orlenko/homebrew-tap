@@ -1,0 +1,406 @@
+#!/usr/bin/env python3
+"""
+pr-family — show a tree of *your* open PRs stacked around a given PR.
+
+Given a PR number (or, with no argument, the PR for the current branch),
+walk the base/head relationships among your open PRs and print the whole
+stacked-PR family as a tree, rooted at the base branch (e.g. main / master).
+
+  pr-family 1234              # family around PR #1234 (ASCII tree)
+  pr-family                   # family around the current branch's PR
+  pr-family 1234 --output md  # Markdown + Mermaid graph (e.g. > status.md)
+  pr-family --all             # include PRs from all authors, not just you
+  pr-family 1234 -R o/r       # explicit owner/repo
+
+Colour (PR state):
+  draft = grey    open = blue    changes requested = red    approved = green
+
+Branches that belong to the family but have no PR (e.g. a local follow-up
+branch you haven't pushed a PR for yet) are shown as plain "(no PR)" leaves.
+
+Requires: gh (authenticated) and git. Run inside the repo (or pass -R).
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+
+# ---- colours ---------------------------------------------------------------
+
+USE_COLOR = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+GREY = "\033[90m"
+BLUE = "\033[34m"
+GREEN = "\033[32m"
+RED = "\033[31m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RESET = "\033[0m"
+
+
+def paint(text, *codes):
+    if not USE_COLOR or not codes:
+        return text
+    return "".join(codes) + text + RESET
+
+
+# ---- shelling out ----------------------------------------------------------
+
+def run(cmd):
+    """Run a command, return stdout. Raise RuntimeError on failure."""
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if p.returncode != 0:
+        raise RuntimeError((p.stderr or p.stdout).strip() or " ".join(cmd))
+    return p.stdout
+
+
+def run_ok(cmd):
+    """Run a command; return True iff it exited 0. Swallow all output."""
+    return subprocess.run(cmd, capture_output=True, text=True).returncode == 0
+
+
+# ---- gh data ---------------------------------------------------------------
+
+PR_FIELDS = "number,title,headRefName,baseRefName,isDraft,reviewDecision,url"
+
+
+def gh_pr_list(repo, all_authors):
+    cmd = ["gh", "pr", "list", "--state", "open", "--limit", "1000",
+           "--json", PR_FIELDS]
+    if not all_authors:
+        cmd += ["--author", "@me"]
+    if repo:
+        cmd += ["--repo", repo]
+    return json.loads(run(cmd))
+
+
+def gh_pr_view(num, repo):
+    cmd = ["gh", "pr", "view", str(num), "--json", PR_FIELDS]
+    if repo:
+        cmd += ["--repo", repo]
+    return json.loads(run(cmd))
+
+
+# ---- git helpers (best effort) ---------------------------------------------
+
+def current_branch():
+    try:
+        b = run(["git", "rev-parse", "--abbrev-ref", "HEAD"]).strip()
+        return b if b and b != "HEAD" else None
+    except RuntimeError:
+        return None
+
+
+def local_branches():
+    try:
+        return run(["git", "branch", "--format=%(refname:short)"]).split()
+    except RuntimeError:
+        return []
+
+
+def resolve_ref(branch):
+    """Resolve a branch name to a ref that actually exists (local or origin)."""
+    for ref in (branch, f"origin/{branch}"):
+        if run_ok(["git", "rev-parse", "--verify", "--quiet", ref]):
+            return ref
+    return None
+
+
+def nearest_ancestor(branch, candidates):
+    """Of `candidates`, the branch that is the closest git-ancestor of `branch`."""
+    bref = resolve_ref(branch)
+    if not bref:
+        return None
+    best, best_dist = None, None
+    for cand in candidates:
+        if cand == branch:
+            continue
+        cref = resolve_ref(cand)
+        if not cref:
+            continue
+        if not run_ok(["git", "merge-base", "--is-ancestor", cref, bref]):
+            continue
+        try:
+            dist = int(run(["git", "rev-list", "--count", f"{cref}..{bref}"]).strip() or "0")
+        except RuntimeError:
+            continue
+        if dist <= 0:
+            continue
+        if best_dist is None or dist < best_dist:
+            best, best_dist = cand, dist
+    return best
+
+
+# ---- model -----------------------------------------------------------------
+
+def state_color(pr):
+    if pr.get("isDraft"):
+        return GREY
+    decision = pr.get("reviewDecision") or ""
+    if decision == "APPROVED":
+        return GREEN
+    if decision == "CHANGES_REQUESTED":
+        return RED
+    return BLUE  # open / review required
+
+
+def state_class(pr):
+    """Mermaid classDef name mirroring state_color()."""
+    if pr.get("isDraft"):
+        return "draft"
+    decision = pr.get("reviewDecision") or ""
+    if decision == "APPROVED":
+        return "approved"
+    if decision == "CHANGES_REQUESTED":
+        return "changes"
+    return "open"
+
+
+def pr_label(pr):
+    # Draft/state is conveyed by the number's colour, so no text flag is needed.
+    num = paint(str(pr["number"]), state_color(pr))
+    branch = paint(pr["headRefName"], BOLD)
+    title = paint(pr["title"], DIM)
+    return f"{num} {branch} {title}"
+
+
+def leaf_label(branch):
+    return f"{paint(branch, BOLD)} {paint('(no PR)', DIM)}"
+
+
+def child_items(branch, root_branch, top, children, leaves):
+    """Ordered children of a branch: PR nodes then PR-less leaf branches.
+
+    The root branch has exactly one child — the top of the stack — so unrelated
+    PRs that also target the base branch never bleed into the tree.
+    """
+    if branch == root_branch:
+        items = [("pr", top)]
+    else:
+        items = [("pr", p) for p in sorted(children.get(branch, []),
+                                           key=lambda p: p["number"])]
+    items += [("leaf", b) for b in leaves.get(branch, [])]
+    return items
+
+
+def find_top(target, by_head):
+    """Walk up the base chain through *our* PRs to the topmost PR in the stack."""
+    seen, cur = set(), target
+    while cur["number"] not in seen:
+        seen.add(cur["number"])
+        parent = by_head.get(cur["baseRefName"])
+        if parent is None or parent["number"] in seen:
+            return cur
+        cur = parent
+    return cur
+
+
+# ---- rendering -------------------------------------------------------------
+
+def render(root_branch, top, children, leaves):
+    """Compact tree: indentation carries hierarchy; PR number leads each line."""
+    out = sys.stdout.write
+    print(paint(root_branch, BOLD))
+
+    def draw(branch, depth):
+        indent = "  " * depth  # two spaces per level; indentation shows parentage
+        for kind, node in child_items(branch, root_branch, top, children, leaves):
+            if kind == "pr":
+                out(indent + pr_label(node) + "\n")
+                draw(node["headRefName"], depth + 1)
+            else:
+                out(indent + leaf_label(node) + "\n")
+
+    draw(root_branch, 1)
+
+
+# ---- markdown / mermaid output ---------------------------------------------
+
+def _mm_escape(text):
+    """Escape a string for use inside a Mermaid "quoted" node label."""
+    return (text.replace("&", "#amp;")
+                .replace('"', "#quot;")
+                .replace("\n", " ")
+                .strip())
+
+
+def _mm_id(prefix, raw):
+    return prefix + re.sub(r"[^0-9A-Za-z]+", "_", str(raw)).strip("_")
+
+
+def render_mermaid(root_branch, top, children, leaves, anchor_num):
+    """Return a Mermaid `graph TD` of the family (base at top, derived below)."""
+    nodes = {}      # id -> (label, classname), insertion-ordered
+    edges = []      # (from_id, to_id)
+    clicks = []     # (id, url)
+    seen = set()
+
+    root_id = _mm_id("br_", root_branch)
+    nodes[root_id] = (_mm_escape(root_branch), "root")
+
+    def walk(parent_id, branch):
+        for kind, node in child_items(branch, root_branch, top, children, leaves):
+            if kind == "pr":
+                nid = f"pr{node['number']}"
+                edges.append((parent_id, nid))
+                if nid in seen:
+                    continue
+                seen.add(nid)
+                label = _mm_escape(
+                    f"{node['headRefName']}<br/>"
+                    f"PR #{node['number']}<br/>{node['title']}")
+                nodes[nid] = (label, state_class(node))
+                if node.get("url"):
+                    clicks.append((nid, node["url"]))
+                walk(nid, node["headRefName"])
+            else:
+                nid = _mm_id("br_", node)
+                nodes[nid] = (_mm_escape(f"{node}<br/>(no PR)"), "nopr")
+                edges.append((parent_id, nid))
+
+    walk(root_id, root_branch)
+
+    lines = ["graph TD"]
+    for nid, (label, cls) in nodes.items():
+        lines.append(f'    {nid}["{label}"]:::{cls}')
+    for a, b in edges:
+        lines.append(f"    {a} --> {b}")
+    for nid, url in clicks:
+        lines.append(f'    click {nid} "{url}" _blank')
+    if anchor_num is not None and f"pr{anchor_num}" in nodes:
+        lines.append(f"    style pr{anchor_num} stroke-width:3px")
+    lines += [
+        "    classDef root fill:#ffffff,stroke:#333333,color:#111111",
+        "    classDef draft fill:#eeeeee,stroke:#9e9e9e,color:#424242",
+        "    classDef open fill:#e3f2fd,stroke:#1e88e5,color:#0d47a1",
+        "    classDef changes fill:#ffebee,stroke:#e53935,color:#b71c1c",
+        "    classDef approved fill:#e8f5e9,stroke:#43a047,color:#1b5e20",
+        "    classDef nopr fill:#fafafa,stroke:#bdbdbd,color:#9e9e9e,"
+        "stroke-dasharray:4 4",
+    ]
+    return "\n".join(lines)
+
+
+def render_markdown(root_branch, top, children, leaves, anchor_num):
+    out = []
+    title = f"PR family · `{top['headRefName']}` (#{top['number']})"
+    out.append(f"## {title}\n")
+    out.append("```mermaid")
+    out.append(render_mermaid(root_branch, top, children, leaves, anchor_num))
+    out.append("```\n")
+    out.append("**State:** ⬜ draft · 🟦 open · 🟥 changes requested · "
+               "🟩 approved · ▫️ no PR")
+    print("\n".join(out))
+
+
+# ---- main ------------------------------------------------------------------
+
+def parse_pr_arg(arg):
+    m = re.search(r"\d+", arg)
+    return int(m.group()) if m else None
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        prog="pr-family", description="Tree of your stacked PRs around a given PR.")
+    ap.add_argument("pr", nargs="?", help="PR number (default: current branch's PR)")
+    ap.add_argument("-o", "--output", default="term",
+                    choices=["term", "md", "markdown", "mermaid"],
+                    help="output format: term (default ASCII tree) or "
+                         "md/markdown/mermaid (Markdown with a Mermaid graph)")
+    ap.add_argument("-a", "--all", action="store_true",
+                    help="include PRs from all authors, not just you")
+    ap.add_argument("-R", "--repo", help="owner/repo (default: current repo)")
+    ap.add_argument("--no-local", action="store_true",
+                    help="skip git lookup of PR-less local branches")
+    args = ap.parse_args()
+
+    global USE_COLOR
+    if args.output != "term":
+        USE_COLOR = False  # never emit ANSI into a Markdown file
+
+    try:
+        prs = gh_pr_list(args.repo, args.all)
+    except RuntimeError as e:
+        sys.exit(f"pr-family: gh pr list failed: {e}")
+
+    by_head = {p["headRefName"]: p for p in prs}
+    by_num = {p["number"]: p for p in prs}
+    children = {}
+    for p in prs:
+        children.setdefault(p["baseRefName"], []).append(p)
+
+    leaves = {}  # parent branch -> [PR-less branch names]
+
+    # ---- resolve the anchor PR ---------------------------------------------
+    target = None
+    if args.pr is not None:
+        num = parse_pr_arg(args.pr)
+        if num is None:
+            sys.exit(f"pr-family: '{args.pr}' is not a PR number")
+        target = by_num.get(num)
+        if target is None:
+            try:  # not yours / not in the fetched set — fetch it directly to anchor
+                target = gh_pr_view(num, args.repo)
+                by_head.setdefault(target["headRefName"], target)
+            except RuntimeError as e:
+                sys.exit(f"pr-family: cannot read PR #{num}: {e}")
+    else:
+        cur = current_branch()
+        if cur is None:
+            sys.exit("pr-family: no PR given and no current branch detected")
+        target = by_head.get(cur)
+        if target is None:
+            # current branch has no PR — anchor on its nearest PR'd ancestor
+            parent = nearest_ancestor(cur, list(by_head.keys()))
+            if parent and parent in by_head:
+                leaves.setdefault(parent, []).append(cur)
+                target = by_head[parent]
+            else:
+                sys.exit(f"pr-family: branch '{cur}' has no PR and no related "
+                         f"PR was found. Pass a PR number explicitly.")
+
+    # ---- build the family ---------------------------------------------------
+    top = find_top(target, by_head)
+    root_branch = top["baseRefName"]
+
+    # set of PR head branches actually in this family (descendants of top)
+    family_heads, stack = set(), [top]
+    while stack:
+        p = stack.pop()
+        if p["headRefName"] in family_heads:
+            continue
+        family_heads.add(p["headRefName"])
+        stack.extend(children.get(p["headRefName"], []))
+
+    # ---- discover PR-less local branches stacked on the family --------------
+    if not args.no_local:
+        family_branches = family_heads | {root_branch}
+        for br in local_branches():
+            if br in by_head or br in leaves or br == root_branch:
+                continue
+            anc = nearest_ancestor(br, list(family_branches))
+            if anc and anc in family_heads:  # only attach under real family PRs
+                leaves.setdefault(anc, []).append(br)
+
+    # ---- render -------------------------------------------------------------
+    anchor_num = target.get("number")
+    if args.output == "term":
+        render(root_branch, top, children, leaves)
+        legend = "  ".join([
+            paint("draft", GREY), paint("open", BLUE),
+            paint("changes-requested", RED), paint("approved", GREEN),
+        ])
+        print(paint("\nstate: ", DIM) + legend)
+    else:
+        render_markdown(root_branch, top, children, leaves, anchor_num)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(130)

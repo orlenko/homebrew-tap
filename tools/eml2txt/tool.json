@@ -1,0 +1,10 @@
+{
+  "name": "eml2txt",
+  "lang": "rust",
+  "bin": "eml2txt",
+  "desc": "Read saved .eml messages: print the body, save attachments",
+  "homepage": "https://github.com/orlenko/homebrew-tap",
+  "license": "MIT",
+  "targets": ["aarch64-apple-darwin"],
+  "test": "selftest"
+}

@@ -1,0 +1,9 @@
+{
+  "name": "gpeek",
+  "lang": "bash",
+  "bin": "gpeek",
+  "desc": "Show git file content or a diff at a ref, with line slicing",
+  "homepage": "https://github.com/orlenko/homebrew-tap",
+  "license": "MIT",
+  "test": "--help"
+}

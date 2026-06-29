@@ -1,9 +1,11 @@
 # Release pipeline. Trigger: push a per-tool tag like `imap-extract-v0.1.0`.
 #
-# Builds the tagged tool on a NATIVE macOS arm64 runner (so Apple's ld64 ad-hoc
-# signs the binary — no hand-rolled signer, runs on Sequoia), smoke-tests that it
-# ACTUALLY runs before publishing, creates a GitHub Release with the tarball +
-# sha256, regenerates Formula/<tool>.rb via forge, and commits it back to main.
+# Compiled tools (lang rust/bun) build on a NATIVE macOS arm64 runner (so Apple's
+# ld64 ad-hoc signs the binary — no hand-rolled signer, runs on Sequoia) and ship
+# a per-arch tarball. Script tools (lang bash/python) are tarred as-is into a
+# noarch tarball — no build, no signing. Either way: smoke-test it ACTUALLY runs,
+# publish a GitHub Release with the tarball + sha256, regenerate Formula/<tool>.rb
+# via forge, and commit it back to main.
 #
 # v1 is arm64-only and intentionally does NOT use cargo-dist: on a native runner
 # signing is free and forge owns the formula, so dist adds nothing yet. Adopt dist
@@ -30,39 +32,68 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Parse tag → tool + version
+      - name: Parse tag → tool + version, detect kind
         id: tag
         run: |
           tag="${GITHUB_REF_NAME}"
-          echo "tool=${tag%-v*}" >> "$GITHUB_OUTPUT"
+          tool="${tag%-v*}"
+          echo "tool=$tool" >> "$GITHUB_OUTPUT"
           echo "version=${tag##*-v}" >> "$GITHUB_OUTPUT"
+          if [ -f "tools/$tool/tool.json" ]; then
+            root="tools"
+          elif [ -f "scripts/$tool/tool.json" ]; then
+            root="scripts"
+          else
+            echo "::error::no tool.json for '$tool' under tools/ or scripts/"; exit 1
+          fi
+          lang="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["lang"])' "$root/$tool/tool.json")"
+          case "$lang" in
+            bash|python) kind=script ;;
+            rust|bun)    kind=compiled ;;
+            *) echo "::error::unknown lang '$lang' for '$tool'"; exit 1 ;;
+          esac
+          echo "root=$root" >> "$GITHUB_OUTPUT"
+          echo "lang=$lang" >> "$GITHUB_OUTPUT"
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
       - name: Build (release)
+        if: steps.tag.outputs.kind == 'compiled'
         run: cargo build --release -p "${{ steps.tag.outputs.tool }}"
 
-      - name: Package + verify signature
+      - name: Package (+ verify signature for compiled)
         id: pkg
         run: |
           tool="${{ steps.tag.outputs.tool }}"
-          asset="${tool}-aarch64-apple-darwin.tar.gz"
-          bin="target/release/${tool}"
-          # Guard against a future toolchain signing regression: verify, else
-          # strip + ad-hoc re-sign.
-          codesign --verify --verbose=2 "$bin" || {
-            codesign --remove-signature "$bin" || true
-            codesign --force --sign - "$bin"
-          }
-          tar -czf "$asset" -C target/release "$tool"
+          if [ "${{ steps.tag.outputs.kind }}" = "compiled" ]; then
+            asset="${tool}-aarch64-apple-darwin.tar.gz"
+            bin="target/release/${tool}"
+            # Guard against a future toolchain signing regression: verify, else
+            # strip + ad-hoc re-sign.
+            codesign --verify --verbose=2 "$bin" || {
+              codesign --remove-signature "$bin" || true
+              codesign --force --sign - "$bin"
+            }
+            tar -czf "$asset" -C target/release "$tool"
+          else
+            # Interpreted script: ship the file as-is — no build, no signing.
+            asset="${tool}-noarch.tar.gz"
+            tar -czf "$asset" -C "${{ steps.tag.outputs.root }}/${tool}" "$tool"
+          fi
           echo "asset=$asset" >> "$GITHUB_OUTPUT"
           echo "sha256=$(shasum -a 256 "$asset" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
-      - name: Smoke test — it must actually RUN (not just compile)
+      - name: Smoke test — it must actually RUN (not just exist)
         run: |
-          bin="target/release/${{ steps.tag.outputs.tool }}"
-          "$bin" selftest || "$bin" --help
+          tool="${{ steps.tag.outputs.tool }}"
+          if [ "${{ steps.tag.outputs.kind }}" = "compiled" ]; then
+            bin="target/release/${tool}"
+            "$bin" selftest || "$bin" --help
+          else
+            "${{ steps.tag.outputs.root }}/${tool}/${tool}" --help
+          fi
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2

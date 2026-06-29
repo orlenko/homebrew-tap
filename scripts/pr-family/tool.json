@@ -1,0 +1,11 @@
+{
+  "name": "pr-family",
+  "lang": "python",
+  "bin": "pr-family",
+  "desc": "Show a tree of your open PRs stacked around a given PR",
+  "homepage": "https://github.com/orlenko/homebrew-tap",
+  "license": "MIT",
+  "depends_on": ["gh"],
+  "caveats": "Needs python3 (preinstalled via the Xcode Command Line Tools: xcode-select --install).",
+  "test": "--help"
+}

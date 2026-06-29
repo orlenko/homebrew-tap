@@ -1,0 +1,10 @@
+{
+  "name": "show-claude-images",
+  "lang": "bash",
+  "bin": "show-claude-images",
+  "desc": "Browse images pasted into the current Claude Code session",
+  "homepage": "https://github.com/orlenko/homebrew-tap",
+  "license": "MIT",
+  "depends_on": ["yazi"],
+  "test": "--help"
+}

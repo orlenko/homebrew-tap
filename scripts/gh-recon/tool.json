@@ -1,0 +1,10 @@
+{
+  "name": "gh-recon",
+  "lang": "bash",
+  "bin": "gh-recon",
+  "desc": "Dossier for an un-cloned GitHub repo: meta, releases, open PRs",
+  "homepage": "https://github.com/orlenko/homebrew-tap",
+  "license": "MIT",
+  "depends_on": ["gh"],
+  "test": "--help"
+}

@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# mgw — mgrep web search with sane output capping.
+#
+# Wraps `mgrep search --web "<query>"`: by default keeps only web (http/https)
+# results, strips local `./` file hits, and caps output to a line budget with a
+# truncation footer — so you don't keep tacking on `| head -N`.
+#
+#   mgw [-n LINES] [-m N] [-a] QUERY [QUERY ...]
+#
+# Examples:
+#   mgw "rust async cancellation"
+#   mgw -n 15 "pnpm workspace protocol"
+#   mgw -a "sqlite wal mode"            # include local file hits too
+#   mgw "topic one" "topic two"         # multiple queries, separated blocks
+set -euo pipefail
+
+n=40
+all=0
+maxc=""
+queries=()
+
+usage() {
+  cat <<'EOF'
+mgw — mgrep web search with sane output capping.
+
+  mgw [-n LINES] [-m N] [-a] QUERY [QUERY ...]
+
+  -n LINES         cap output to LINES per query (default: 40)
+  -m, --max-count  pass-through to `mgrep -m` (result count; mgrep default 10)
+  -a, --all        keep local `./` file hits too (default: web results only)
+  -h, --help       this help
+
+Wraps `mgrep search --web`. Exits 0 on success; non-zero only if mgrep fails.
+EOF
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help)      usage; exit 0 ;;
+    -n)             n="${2:?-n needs a number}"; shift 2 ;;
+    -n*)            n="${1#-n}"; shift ;;
+    -m|--max-count) maxc="${2:?-m needs a number}"; shift 2 ;;
+    -a|--all)       all=1; shift ;;
+    --)             shift; while [ $# -gt 0 ]; do queries+=("$1"); shift; done ;;
+    -*)             echo "mgw: unknown flag '$1'" >&2; exit 2 ;;
+    *)              queries+=("$1"); shift ;;
+  esac
+done
+
+case "$n" in ''|*[!0-9]*) echo "mgw: -n must be a positive integer (got '$n')" >&2; exit 2 ;; esac
+[ "${#queries[@]}" -gt 0 ] || { usage >&2; exit 2; }
+
+run_one() {
+  local q=$1 out rc
+  local margs=(search --web)
+  [ -n "$maxc" ] && margs+=(-m "$maxc")
+  margs+=("$q")
+
+  out=$(mgrep "${margs[@]}" 2>&1) && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s\n' "$out" >&2
+    return "$rc"
+  fi
+
+  if [ "$all" -eq 0 ]; then
+    out=$(printf '%s\n' "$out" | grep -v '^\./' || true)
+  fi
+  if [ -z "$out" ]; then
+    echo "(no results)"
+    return 0
+  fi
+
+  local total
+  total=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
+  if [ "$total" -gt "$n" ]; then
+    printf '%s\n' "$out" | sed -n "1,${n}p"
+    printf '…(truncated, capped at %d of %d lines; -n N to raise, -a for local hits)\n' "$n" "$total"
+  else
+    printf '%s\n' "$out"
+  fi
+}
+
+multi=0
+[ "${#queries[@]}" -gt 1 ] && multi=1
+fail=0
+first=1
+for q in "${queries[@]}"; do
+  if [ "$multi" -eq 1 ]; then
+    [ "$first" -eq 1 ] || echo
+    echo "--- $q ---"
+  fi
+  first=0
+  run_one "$q" || fail=1
+done
+
+exit "$fail"

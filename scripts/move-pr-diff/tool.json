@@ -1,0 +1,10 @@
+{
+  "name": "move-pr-diff",
+  "lang": "bash",
+  "bin": "move-pr-diff",
+  "desc": "Re-base a PR's diff onto a new target branch as a fresh PR",
+  "homepage": "https://github.com/orlenko/homebrew-tap",
+  "license": "MIT",
+  "depends_on": ["gh", "jq"],
+  "test": "--help"
+}

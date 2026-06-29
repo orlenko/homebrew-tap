@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# ghcat — print a file from a GitHub repo you have NOT checked out.
+#
+#   ghcat <owner>/<repo> <path> [ref] [--lines A,B]
+#
+# Examples:
+#   ghcat cli/cli README.md
+#   ghcat torvalds/linux Makefile v6.9
+#   ghcat cli/cli pkg/cmd/root/root.go --lines 1,40
+#
+# Fetches via the GitHub "raw" media type (no base64 decode step). Requires an
+# authenticated gh (run `gh auth status` to check).
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+ghcat — print a file from an un-checked-out GitHub repo.
+
+  ghcat <owner>/<repo> <path> [ref] [--lines A,B]
+
+Examples:
+  ghcat cli/cli README.md
+  ghcat torvalds/linux Makefile v6.9
+  ghcat cli/cli pkg/cmd/root/root.go --lines 1,40
+
+Requires authenticated gh. Use --lines A,B to slice (passed to sed).
+EOF
+}
+
+lines=""
+pos=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help)  usage; exit 0 ;;
+    --lines)    lines="${2:?ghcat: --lines needs A,B}"; shift 2 ;;
+    --lines=*)  lines="${1#--lines=}"; shift ;;
+    --)         shift; while [ $# -gt 0 ]; do pos+=("$1"); shift; done ;;
+    -*)         echo "ghcat: unknown flag '$1'" >&2; exit 2 ;;
+    *)          pos+=("$1"); shift ;;
+  esac
+done
+
+[ "${#pos[@]}" -ge 2 ] || { usage >&2; exit 2; }
+repo="${pos[0]}"
+path="${pos[1]}"
+ref="${pos[2]:-}"
+
+case "$repo" in
+  */*) : ;;
+  *) echo "ghcat: first arg must be <owner>/<repo> (got '$repo')" >&2; exit 2 ;;
+esac
+
+api="repos/$repo/contents/$path"
+[ -n "$ref" ] && api="$api?ref=$ref"
+
+if [ -n "$lines" ]; then
+  gh api "$api" -H "Accept: application/vnd.github.raw" | sed -n "${lines}p"
+else
+  gh api "$api" -H "Accept: application/vnd.github.raw"
+fi

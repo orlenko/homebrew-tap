@@ -5,6 +5,17 @@
 # Bun escape-hatch lane (later)
 **/node_modules
 
+# Python (pr-family script + py_compile lint artifacts)
+__pycache__/
+*.pyc
+
+# Subagent runtime memory (the agent *definitions* in .claude/agents/ are tracked;
+# their accumulated memory is per-machine state, not repo content).
+.claude/agent-memory/
+
+# Scratch drop-zone for source I'm asked to look at — not tap content.
+reference/
+
 # cargo-dist working dir
 /dist
 

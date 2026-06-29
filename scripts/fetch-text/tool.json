@@ -1,0 +1,10 @@
+{
+  "name": "fetch-text",
+  "lang": "bash",
+  "bin": "fetch-text",
+  "desc": "Fetch a web page as plain text for WebFetch-blocked domains",
+  "homepage": "https://github.com/orlenko/homebrew-tap",
+  "license": "MIT",
+  "caveats": "Optionally install w3m for nicer HTML-to-text rendering; without it a built-in stripper is used.",
+  "test": "--help"
+}

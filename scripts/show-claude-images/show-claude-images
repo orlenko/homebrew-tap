@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# show-claude-images
+#
+# Run from the cwd of an active Claude Code session. Opens yazi in the image-cache
+# directory for the current session so you can browse every image you've pasted.
+#
+# Usage:
+#   show-claude-images           # current session
+#   show-claude-images --all     # every session that has pasted images in this project
+#   show-claude-images --list    # just print paths, don't launch yazi
+
+set -euo pipefail
+
+mode="current"
+for arg in "$@"; do
+  case "$arg" in
+    --all)  mode="all" ;;
+    --list) mode="list" ;;
+    -h|--help)
+      sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0 ;;
+    *)
+      echo "Unknown flag: $arg" >&2; exit 2 ;;
+  esac
+done
+
+cwd="$(pwd -P)"
+slug="${cwd//\//-}"                                 # /Users/foo/bar -> -Users-foo-bar
+project_dir="$HOME/.claude/projects/$slug"
+
+if [[ ! -d "$project_dir" ]]; then
+  echo "No Claude project for this directory."           >&2
+  echo "  expected: $project_dir"                        >&2
+  exit 1
+fi
+
+# Collect session .jsonl files, newest-first by mtime.
+# (macOS ships bash 3.2 — no mapfile; use a portable read loop.)
+session_files=()
+while IFS= read -r line; do
+  session_files+=("$line")
+done < <(ls -t "$project_dir"/*.jsonl 2>/dev/null)
+if (( ${#session_files[@]} == 0 )); then
+  echo "No sessions found in $project_dir" >&2
+  exit 1
+fi
+
+cache_root="$HOME/.claude/image-cache"
+
+if [[ "$mode" == "current" ]]; then
+  uuid="$(basename "${session_files[0]}" .jsonl)"
+  dir="$cache_root/$uuid"
+  if [[ ! -d "$dir" ]]; then
+    echo "No images yet in the current session ($uuid)."
+    echo "(expected: $dir)"
+    exit 0
+  fi
+  count="$(find "$dir" -maxdepth 1 -type f | wc -l | tr -d ' ')"
+  echo "Session: $uuid"
+  echo "Images:  $count"
+  exec yazi "$dir"
+fi
+
+if [[ "$mode" == "list" ]]; then
+  uuid="$(basename "${session_files[0]}" .jsonl)"
+  dir="$cache_root/$uuid"
+  [[ -d "$dir" ]] && find "$dir" -maxdepth 1 -type f | sort
+  exit 0
+fi
+
+# --all: build a temp dir of symlinks named <uuid>/<n>.png and open yazi there
+tmp="$(mktemp -d -t claude-images.XXXXXX)"
+total=0
+for f in "${session_files[@]}"; do
+  uuid="$(basename "$f" .jsonl)"
+  src="$cache_root/$uuid"
+  [[ -d "$src" ]] || continue
+  ln -s "$src" "$tmp/$uuid"
+  total=$(( total + $(find "$src" -maxdepth 1 -type f | wc -l) ))
+done
+if (( total == 0 )); then
+  echo "No images pasted in any session for this project."
+  rm -rf "$tmp"
+  exit 0
+fi
+echo "Sessions with images: $(find "$tmp" -maxdepth 1 -type l | wc -l | tr -d ' ')"
+echo "Total images:         $total"
+echo "(symlink farm at $tmp — yazi will preview each session as a folder)"
+exec yazi "$tmp"

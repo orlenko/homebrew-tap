@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# fetch-text — fetch a URL and print it as plain text.
+#
+# For pages WebFetch refuses (reddit, old.reddit, stackoverflow, superuser,
+# law.stackexchange, ...). Fetches with curl + a browser User-Agent, then
+# renders HTML to text via w3m (if installed) or a built-in Python stripper.
+#
+#   fetch-text <url>
+#   fetch-text <url> | head -100
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+fetch-text — fetch a URL and print it as plain text.
+
+  fetch-text <url>
+  fetch-text <url> | head -100
+
+Renders HTML to text with w3m if available, else a built-in Python stripper.
+EOF
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+  "")        usage >&2; exit 2 ;;
+esac
+
+url=$1
+ua="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+render() {
+  if command -v w3m >/dev/null 2>&1; then
+    w3m -dump -T text/html
+  else
+    python3 -c '
+import sys, re
+from html.parser import HTMLParser
+SKIP = {"script","style","noscript","head","svg","nav","footer","aside","form","button","template"}
+BLOCK = {"p","div","br","li","tr","h1","h2","h3","h4","h5","h6","section","article","ul","ol","table","blockquote","pre","header"}
+class T(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out=[]; self.skip=0
+    def handle_starttag(self, tag, attrs):
+        if tag in SKIP: self.skip += 1
+        elif tag in BLOCK: self.out.append("\n")
+    def handle_startendtag(self, tag, attrs):
+        if tag in BLOCK: self.out.append("\n")
+    def handle_endtag(self, tag):
+        if tag in SKIP and self.skip: self.skip -= 1
+        elif tag in BLOCK: self.out.append("\n")
+    def handle_data(self, d):
+        if not self.skip: self.out.append(d)
+p=T(); p.feed(sys.stdin.read())
+t="".join(p.out)
+t=re.sub(r"[ \t]+"," ",t)
+t=re.sub(r"\n[ \t]+","\n",t)
+t=re.sub(r"\n{3,}","\n\n",t)
+sys.stdout.write(t.strip()+"\n")
+'
+  fi
+}
+
+curl -fsSL --compressed -A "$ua" "$url" | render

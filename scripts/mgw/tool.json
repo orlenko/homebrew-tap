@@ -1,0 +1,10 @@
+{
+  "name": "mgw",
+  "lang": "bash",
+  "bin": "mgw",
+  "desc": "Web search via mgrep, web-only with capped output",
+  "homepage": "https://github.com/orlenko/homebrew-tap",
+  "license": "MIT",
+  "caveats": "Requires mgrep, which is not in Homebrew: npm install -g @mixedbread/mgrep",
+  "test": "--help"
+}

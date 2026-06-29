@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# gh-recon — one-screen dossier for a GitHub repo you have NOT cloned.
+#
+#   gh-recon <owner>/<repo>
+#
+# Prints: repo meta, latest releases, and recently-updated open PRs.
+# Requires an authenticated gh (run `gh auth status` to check).
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+gh-recon — one-screen dossier for an un-cloned GitHub repo.
+
+  gh-recon <owner>/<repo>
+
+Shows repo meta, latest releases, and recently-updated open PRs.
+EOF
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+  "")        usage >&2; exit 2 ;;
+esac
+
+repo=$1
+case "$repo" in
+  */*) : ;;
+  *) echo "gh-recon: arg must be <owner>/<repo> (got '$repo')" >&2; exit 2 ;;
+esac
+
+echo "== meta =="
+gh api "repos/$repo" --jq '{
+  full_name, description,
+  stars: .stargazers_count, open_issues: .open_issues_count,
+  default_branch, pushed_at, language, archived,
+  license: (.license.spdx_id // null)
+}'
+
+echo
+echo "== releases (latest 8) =="
+gh api "repos/$repo/releases" --jq '.[0:8][] | {tag: .tag_name, date: .published_at, name}' || true
+
+echo
+echo "== recent open PRs (latest 10 by update) =="
+gh api "search/issues?q=repo:$repo+is:pr+is:open&per_page=10&sort=updated" \
+  --jq '.items[] | {number, title, user: .user.login, updated: .updated_at}'

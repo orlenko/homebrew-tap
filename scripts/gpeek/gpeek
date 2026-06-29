@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# gpeek — peek at git content at a ref or as a diff, with optional line slicing.
+#
+#   gpeek <ref>:<path> [START,END]   show file at a ref, optionally sliced to lines
+#   gpeek <ref>:<path> [N]           show just line N of the file at a ref
+#   gpeek diff <path> [RANGE]        diff <path> over RANGE (default: $GPEEK_BASE..HEAD)
+#
+# Examples:
+#   gpeek HEAD:src/main.rs 40,80
+#   gpeek origin/main:Cargo.toml
+#   GPEEK_BASE=<sha> gpeek diff src/main.rs
+#   gpeek diff src/main.rs origin/main..HEAD
+#
+# Env:
+#   GPEEK_BASE   default base for `gpeek diff`, used as "$GPEEK_BASE..HEAD".
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+gpeek — peek at git content at a ref or as a diff, with optional line slicing.
+
+  gpeek <ref>:<path> [START,END]   show file at a ref, optionally sliced to lines
+  gpeek <ref>:<path> [N]           show just line N of the file at a ref
+  gpeek diff <path> [RANGE]        diff <path> over RANGE (default: $GPEEK_BASE..HEAD)
+
+Examples:
+  gpeek HEAD:src/main.rs 40,80
+  gpeek origin/main:Cargo.toml
+  GPEEK_BASE=<sha> gpeek diff src/main.rs
+  gpeek diff src/main.rs origin/main..HEAD
+
+Env:
+  GPEEK_BASE   default base for `gpeek diff`, used as "$GPEEK_BASE..HEAD".
+EOF
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+  "")        usage >&2; exit 2 ;;
+esac
+
+if [ "$1" = diff ]; then
+  [ $# -ge 2 ] || { echo "gpeek: 'diff' needs a <path>" >&2; exit 2; }
+  path=$2
+  range="${3:-${GPEEK_BASE:?gpeek: set GPEEK_BASE to a base ref, or pass RANGE explicitly}..HEAD}"
+  exec git diff "$range" -- "$path"
+fi
+
+spec=$1
+case "$spec" in
+  *:*) : ;;
+  *) echo "gpeek: expected <ref>:<path> (got '$spec'); did you mean 'gpeek diff $spec'?" >&2; exit 2 ;;
+esac
+
+range="${2:-}"
+if [ -n "$range" ]; then
+  git show "$spec" | sed -n "${range}p"
+else
+  git show "$spec"
+fi

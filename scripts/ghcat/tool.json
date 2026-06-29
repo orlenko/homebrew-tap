@@ -1,0 +1,10 @@
+{
+  "name": "ghcat",
+  "lang": "bash",
+  "bin": "ghcat",
+  "desc": "Print one file from an un-checked-out GitHub repo",
+  "homepage": "https://github.com/orlenko/homebrew-tap",
+  "license": "MIT",
+  "depends_on": ["gh"],
+  "test": "--help"
+}

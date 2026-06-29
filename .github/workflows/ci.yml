@@ -41,12 +41,32 @@ jobs:
       - name: Lint every tool manifest
         run: |
           shopt -s nullglob
-          for d in tools/*/; do
+          for d in tools/*/ scripts/*/; do
             t="$(basename "$d")"
             if [ -f "${d}tool.json" ]; then
               cargo run -q -p forge -- lint "$t"
             fi
           done
+
+      - name: Lint scripts (shellcheck / py_compile)
+        run: |
+          shopt -s nullglob
+          fail=0
+          for d in scripts/*/; do
+            t="$(basename "$d")"
+            f="${d}${t}"
+            if [ ! -f "$f" ]; then
+              echo "::error::missing script file $f"; fail=1; continue
+            fi
+            # Pick the linter by shebang; -S error catches real bugs without
+            # rejecting working scripts on style nits.
+            case "$(head -1 "$f")" in
+              *bash*)   shellcheck -S error "$f" || fail=1 ;;
+              *python*) python3 -m py_compile "$f" || fail=1 ;;
+              *) echo "::error::$f: unrecognized shebang"; fail=1 ;;
+            esac
+          done
+          exit "$fail"
 
       - name: Formula drift-gate (generated, never hand-edited)
         run: |

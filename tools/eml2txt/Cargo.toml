@@ -1,0 +1,17 @@
+[package]
+name = "eml2txt"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Read saved .eml messages: print the body, save attachments"
+
+[[bin]]
+name = "eml2txt"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+mail-parser = { version = "0.11", features = ["full_encoding"] }
