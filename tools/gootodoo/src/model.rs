@@ -50,6 +50,23 @@ pub struct Outcome {
     pub error: Option<String>,
 }
 
+/// One `pull` output row: the read-back state of a managed task. `status` is
+/// `needsAction` | `completed` | `deleted` | `error`. `deleted` = the task is no
+/// longer at its managed (list, id) — the human removed it, OR (rarely) moved it
+/// out of its list; a single GET can't tell those apart. `error` = gootodoo
+/// couldn't read it (transient/auth/permission); `error` carries the message and
+/// the row is emitted so the stream stays one-per-key and never truncates.
+/// `completed_at` is the RFC3339 completion stamp, null unless completed.
+#[derive(Debug, Serialize)]
+pub struct PullRow {
+    pub key: String,
+    pub google_id: String,
+    pub status: String,
+    pub completed_at: Option<String>,
+    pub list: String,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Target {
     Task,
@@ -162,11 +179,15 @@ impl Outcome {
     }
 }
 
-/// The marker gpush appends to every task's notes. It is gpush's, not the
+/// The marker gootodoo appends to every task's notes. It is gootodoo's, not the
 /// emitter's: re-appended on *every* write because a later patch (which carries
 /// the emitter's notes, sans marker) would otherwise strip it and orphan the
 /// rebuild anchor.
-pub const KEY_TAG_PREFIX: &str = "[gpush:key=";
+pub const KEY_TAG_PREFIX: &str = "[gootodoo:key=";
+
+/// The pre-rename marker (the tool was `gpush` through v0.1.0). Still *read* for
+/// recovery so tasks created before the rename aren't orphaned; never written.
+const LEGACY_KEY_TAG_PREFIX: &str = "[gpush:key=";
 
 /// Append the key marker to the emitter's notes (which may be empty).
 pub fn stamp_notes(user_notes: Option<&str>, key: &str) -> String {
@@ -177,16 +198,22 @@ pub fn stamp_notes(user_notes: Option<&str>, key: &str) -> String {
     }
 }
 
-/// Recover the key from a task's notes, if gpush stamped it. Best-effort: the
+/// Recover the key from a task's notes, if gootodoo stamped it. Best-effort: the
 /// notes field is user-editable, so a missing/edited marker just means that task
 /// won't be recovered by a rebuild (the idmap stays authoritative). We take the
-/// *last* marker via `rfind` — gpush always appends its own at the very end, so a
-/// marker an emitter forged inside the notes body can't shadow the real one.
+/// *last* marker via `rfind` — gootodoo always appends its own at the very end, so
+/// a marker an emitter forged inside the notes body can't shadow the real one. The
+/// current marker wins over the legacy one when both are present.
 pub fn extract_key(notes: &str) -> Option<String> {
-    let start = notes.rfind(KEY_TAG_PREFIX)? + KEY_TAG_PREFIX.len();
-    let rest = &notes[start..];
-    let end = rest.find(']')?;
-    Some(rest[..end].to_string())
+    for prefix in [KEY_TAG_PREFIX, LEGACY_KEY_TAG_PREFIX] {
+        if let Some(idx) = notes.rfind(prefix) {
+            let rest = &notes[idx + prefix.len()..];
+            if let Some(end) = rest.find(']') {
+                return Some(rest[..end].to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Google Tasks stores `due` as a date only — the time-of-day is dropped and the
@@ -252,10 +279,19 @@ mod tests {
 
         assert_eq!(extract_key("no marker here"), None);
 
-        // A forged marker inside emitter notes must not shadow gpush's real one,
+        // A forged marker inside emitter notes must not shadow gootodoo's real one,
         // which is always appended last.
-        let spoofed = stamp_notes(Some("sneaky [gpush:key=EVIL] text"), "real-key");
+        let spoofed = stamp_notes(Some("sneaky [gootodoo:key=EVIL] text"), "real-key");
         assert_eq!(extract_key(&spoofed).as_deref(), Some("real-key"));
+
+        // Pre-rename tasks carry the legacy `[gpush:key=]` marker — still recovered.
+        assert_eq!(
+            extract_key("body\n\n[gpush:key=old-key]").as_deref(),
+            Some("old-key")
+        );
+        // When both are present, the current marker wins.
+        let both = format!("{}\n\n{}", "[gpush:key=old]", stamp_notes(None, "new"));
+        assert_eq!(extract_key(&both).as_deref(), Some("new"));
     }
 
     #[test]
@@ -268,6 +304,39 @@ mod tests {
         );
         // Not a bare date → passthrough (Google will reject if truly bogus).
         assert_eq!(due_to_rfc3339("garbage"), "garbage");
+    }
+
+    #[test]
+    fn pull_row_serializes_to_contract_shape() {
+        let row = PullRow {
+            key: "osavul:tax-2025:005".to_string(),
+            google_id: "b3k9".to_string(),
+            status: "completed".to_string(),
+            completed_at: Some("2026-07-05T14:02:00.000Z".to_string()),
+            list: "Tax 2025".to_string(),
+            error: None,
+        };
+        let v: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&row).unwrap()).unwrap();
+        assert_eq!(v["key"], "osavul:tax-2025:005");
+        assert_eq!(v["google_id"], "b3k9");
+        assert_eq!(v["status"], "completed");
+        assert_eq!(v["completed_at"], "2026-07-05T14:02:00.000Z");
+        assert_eq!(v["list"], "Tax 2025");
+        assert!(v.get("error").is_some_and(|e| e.is_null()));
+
+        // A deleted task: completed_at is null, not omitted.
+        let deleted = PullRow {
+            key: "k".to_string(),
+            google_id: "g".to_string(),
+            status: "deleted".to_string(),
+            completed_at: None,
+            list: "Personal".to_string(),
+            error: None,
+        };
+        let v: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&deleted).unwrap()).unwrap();
+        assert!(v.get("completed_at").is_some_and(|c| c.is_null()));
     }
 
     #[test]

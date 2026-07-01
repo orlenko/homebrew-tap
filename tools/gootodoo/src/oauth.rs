@@ -1,5 +1,5 @@
 //! OAuth2 for an installed ("Desktop") Google app: one-time consent via a
-//! loopback redirect + PKCE (`gpush auth`), then silent access-token refresh on
+//! loopback redirect + PKCE (`gootodoo auth`), then silent access-token refresh on
 //! every run. Hand-rolled on `ureq` — the OOB flow Google killed in 2022 is
 //! avoided in favour of a `http://127.0.0.1:<port>` redirect.
 //!
@@ -86,7 +86,7 @@ impl Auth {
         );
 
         eprintln!(
-            "gpush: opening a browser for Google consent. If it doesn't open, visit:\n\n{url}\n"
+            "gootodoo: opening a browser for Google consent. If it doesn't open, visit:\n\n{url}\n"
         );
         let _ = std::process::Command::new("open").arg(&url).status();
 
@@ -125,11 +125,11 @@ impl Auth {
         };
         self.save_token(&token)?;
         eprintln!(
-            "gpush: authorized — token cached at {}",
+            "gootodoo: authorized — token cached at {}",
             self.token_path.display()
         );
         eprintln!(
-            "gpush: NOTE — if your OAuth consent screen is in 'Testing' status (the default for a \
+            "gootodoo: NOTE — if your OAuth consent screen is in 'Testing' status (the default for a \
              personal project), this refresh token expires in 7 days. Publish the app to \
              'Production' for long-lived access."
         );
@@ -144,9 +144,9 @@ impl Auth {
         // across the load/refresh below; it's put back before we return.
         let mut token = match self.cached.borrow_mut().take() {
             Some(t) => t,
-            None => self
-                .load_token()
-                .map_err(|e| anyhow!("{e}\ngpush: not authorized — run `gpush auth` first"))?,
+            None => self.load_token().map_err(|e| {
+                anyhow!("{e}\ngootodoo: not authorized — run `gootodoo auth` first")
+            })?,
         };
 
         if now() >= token.expires_at {
@@ -160,7 +160,7 @@ impl Auth {
             let (status, val) = self.token_request(&body)?;
             if status != 200 {
                 bail!(
-                    "OAuth refresh failed ({status}) — run `gpush auth` again.\n\
+                    "OAuth refresh failed ({status}) — run `gootodoo auth` again.\n\
                      (Consent screens in 'Testing' status expire refresh tokens after 7 days; \
                      publish the app to 'Production' for long-lived tokens.)\nresponse: {val}"
                 );
@@ -346,9 +346,9 @@ fn wait_for_code(listener: &TcpListener) -> Result<(String, String)> {
 
         let resolved = code.is_some() || error.is_some();
         let page = if resolved {
-            "<html><body><h2>gpush: authorized</h2><p>You can close this tab.</p></body></html>"
+            "<html><body><h2>gootodoo: authorized</h2><p>You can close this tab.</p></body></html>"
         } else {
-            "<html><body>gpush: waiting for the Google redirect…</body></html>"
+            "<html><body>gootodoo: waiting for the Google redirect…</body></html>"
         };
         let resp = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}",

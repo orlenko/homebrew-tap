@@ -1,4 +1,4 @@
-//! The idempotency map: `key → {google_id, target, list}`, gpush's own private
+//! The idempotency map: `key → {google_id, target, list}`, gootodoo's own private
 //! state (the emitter never reads it). Google Tasks forbid client-supplied ids,
 //! so this file is the *only* authoritative record of which key maps to which
 //! task — losing it means a rebuild scan (see `tasks::scan_keys`) is the only
@@ -34,10 +34,10 @@ pub struct IdMap {
 
 impl IdMap {
     /// Open (creating the config dir), take an exclusive advisory lock, and load
-    /// the map. Fails loudly if another gpush holds the lock.
+    /// the map. Fails loudly if another gootodoo holds the lock.
     pub fn open(dir: &Path) -> Result<Self> {
         fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        let lock_path = dir.join("gpush.lock");
+        let lock_path = dir.join("gootodoo.lock");
         let lock = OpenOptions::new()
             .create(true)
             .read(true)
@@ -49,7 +49,7 @@ impl IdMap {
         // dropped at the end of the run.
         lock.try_lock().map_err(|_| {
             anyhow!(
-                "another gpush is already running (lock held on {}); wait for it to finish",
+                "another gootodoo is already running (lock held on {}); wait for it to finish",
                 lock_path.display()
             )
         })?;

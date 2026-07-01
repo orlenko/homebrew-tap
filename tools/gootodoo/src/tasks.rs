@@ -92,12 +92,9 @@ impl Tasks {
         })
     }
 
-    /// Resolve a task-list *name* to its id, creating the list if absent. `None`
-    /// selects the user's default list (`@default`).
-    pub fn resolve_or_create_list(&self, name: Option<&str>) -> Result<String> {
-        let Some(name) = name else {
-            return Ok("@default".to_string());
-        };
+    /// All of the user's task-lists as `(id, title)`, fully paginated.
+    pub fn list_tasklists(&self) -> Result<Vec<(String, String)>> {
+        let mut out = Vec::new();
         let mut page: Option<String> = None;
         loop {
             let url = match &page {
@@ -110,10 +107,11 @@ impl Tasks {
             }
             if let Some(items) = v.get("items").and_then(|i| i.as_array()) {
                 for it in items {
-                    if it.get("title").and_then(|t| t.as_str()) == Some(name)
-                        && let Some(id) = it.get("id").and_then(|i| i.as_str())
-                    {
-                        return Ok(id.to_string());
+                    if let (Some(id), Some(title)) = (
+                        it.get("id").and_then(|x| x.as_str()),
+                        it.get("title").and_then(|x| x.as_str()),
+                    ) {
+                        out.push((id.to_string(), title.to_string()));
                     }
                 }
             }
@@ -121,6 +119,18 @@ impl Tasks {
                 Some(t) => page = Some(t.to_string()),
                 None => break,
             }
+        }
+        Ok(out)
+    }
+
+    /// Resolve a task-list *name* to its id, creating the list if absent. `None`
+    /// selects the user's default list (`@default`).
+    pub fn resolve_or_create_list(&self, name: Option<&str>) -> Result<String> {
+        let Some(name) = name else {
+            return Ok("@default".to_string());
+        };
+        if let Some((id, _)) = self.list_tasklists()?.into_iter().find(|(_, t)| t == name) {
+            return Ok(id);
         }
         // Not found → create it.
         let (status, v) = self.send_json(
@@ -140,8 +150,35 @@ impl Tasks {
             .ok_or_else(|| anyhow!("created task-list but no id was returned"))
     }
 
+    /// Fetch a single task's read-back state: `Some((status, completed_at))`, or
+    /// `None` if it 404s (the human deleted it in Google). `status` is Google's
+    /// `needsAction`/`completed`; `completed_at` is its RFC3339 `completed` stamp.
+    pub fn get_task(
+        &self,
+        list_id: &str,
+        task_id: &str,
+    ) -> Result<Option<(String, Option<String>)>> {
+        let (status, v) = self.get(&format!("{BASE}/lists/{list_id}/tasks/{task_id}"))?;
+        match status {
+            s if (200..300).contains(&s) => {
+                let st = v
+                    .get("status")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("needsAction")
+                    .to_string();
+                let completed = v
+                    .get("completed")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string());
+                Ok(Some((st, completed)))
+            }
+            404 => Ok(None),
+            s => bail!("fetching task failed ({s}): {}", gerr(&v)),
+        }
+    }
+
     /// Scan a list — completed *and* hidden, fully paginated — and return every
-    /// `(key, task_id)` recoverable from a gpush notes-tag. This closes the
+    /// `(key, task_id)` recoverable from a gootodoo notes-tag. This closes the
     /// crash-between-create-and-idmap-write gap: a task Google has but the idmap
     /// lost is rediscovered here before the next create would duplicate it.
     pub fn scan_keys(&self, list_id: &str) -> Result<Vec<(String, String)>> {

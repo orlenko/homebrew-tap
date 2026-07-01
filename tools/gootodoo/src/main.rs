@@ -1,10 +1,10 @@
-//! gpush — write Google Tasks (and, later, Calendar) idempotently from a stream
+//! gootodoo — write Google Tasks (and, later, Calendar) idempotently from a stream
 //! of NDJSON "publish intents". One intent per stdin line; one result JSON per
 //! line to stdout, in order; every line processed; non-zero exit if any failed.
 //!
 //! It owns two things the emitter deliberately does not: OAuth (see `oauth`) and
 //! the idempotency map (see `idmap`). The emitter keys each item with an opaque
-//! string; gpush maps that key to a Google object and thereafter patches rather
+//! string; gootodoo maps that key to a Google object and thereafter patches rather
 //! than duplicates. MVP is tasks-only; the event fields in the frozen contract
 //! are carried through but not yet acted on.
 
@@ -22,20 +22,20 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use idmap::{Entry, IdMap};
-use model::{Action, Intent, Outcome, Target};
+use model::{Action, Intent, Outcome, PullRow, Target};
 use oauth::Auth;
 use tasks::{PatchOutcome, Tasks};
 
 #[derive(Parser)]
 #[command(
-    name = "gpush",
+    name = "gootodoo",
     version,
     about = "Write Google Tasks/Calendar idempotently from NDJSON intents on stdin.",
     long_about = "Reads one publish-intent JSON per stdin line and writes it to Google Tasks, \
 keyed by an opaque idempotency string so re-sending patches instead of duplicating. Emits one \
 result JSON per line to stdout in input order; processes every line; exits non-zero if any failed.\n\n\
-Config lives in ~/.config/gpush: credentials.json (your Desktop OAuth client) and a cached token. \
-Run `gpush auth` once before the first live drain.",
+Config lives in ~/.config/gootodoo: credentials.json (your Desktop OAuth client) and a cached token. \
+Run `gootodoo auth` once before the first live drain.",
     args_conflicts_with_subcommands = true
 )]
 struct Cli {
@@ -57,12 +57,22 @@ struct DrainArgs {
 
 #[derive(Subcommand)]
 enum Command {
-    /// One-time Google consent (opens a browser). Reads ~/.config/gpush/credentials.json.
+    /// One-time Google consent (opens a browser). Reads ~/.config/gootodoo/credentials.json.
     Auth,
-    /// Rebuild the idmap from a list's gpush notes-tags (recovery / drift-repair).
+    /// Rebuild the idmap from a list's gootodoo notes-tags (recovery / drift-repair).
     Reconcile {
         /// Task-list name to scan (default: the Google default list).
         list: Option<String>,
+    },
+    /// Read back the state of managed tasks (what the human completed / deleted in
+    /// Google) as NDJSON, one row per key in the idmap. Read-only.
+    Pull {
+        /// Only tasks in this list (default: every list gootodoo manages).
+        #[arg(long)]
+        list: Option<String>,
+        /// Only emit tasks the human has completed.
+        #[arg(long = "completed-only")]
+        completed_only: bool,
     },
     /// Offline self-check (no network) — backs the formula `test do`.
     Selftest,
@@ -70,38 +80,90 @@ enum Command {
 
 fn config_dir() -> PathBuf {
     if let Some(x) = std::env::var_os("XDG_CONFIG_HOME").filter(|s| !s.is_empty()) {
+        PathBuf::from(x).join("gootodoo")
+    } else {
+        PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config/gootodoo")
+    }
+}
+
+/// Pre-rename config location (the tool was `gpush` through v0.1.0).
+fn legacy_config_dir() -> PathBuf {
+    if let Some(x) = std::env::var_os("XDG_CONFIG_HOME").filter(|s| !s.is_empty()) {
         PathBuf::from(x).join("gpush")
     } else {
         PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config/gpush")
     }
 }
 
+/// One-time migration of the pre-rename config dir. If the new dir doesn't exist
+/// yet but the legacy `gpush` one does, move it wholesale so the cached token +
+/// idmap + credentials carry over and the user needn't re-auth. A rename failure
+/// is a hard error, not a shrug: continuing with a fresh empty config would make
+/// the next drain treat every existing key as new and duplicate every task, so we
+/// surface it and let the caller abort. (Stop any running `gpush` before the first
+/// `gootodoo` run — the move is not coordinated with a live v0.1 lock.)
+fn migrate_legacy_config(dir: &Path) -> Result<()> {
+    if dir.exists() {
+        return Ok(());
+    }
+    let legacy = legacy_config_dir();
+    if !legacy.exists() || legacy == *dir {
+        return Ok(());
+    }
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    std::fs::rename(&legacy, dir).with_context(|| {
+        format!(
+            "migrating config {} -> {} failed; move it by hand (`mv {} {}`) and retry",
+            legacy.display(),
+            dir.display(),
+            legacy.display(),
+            dir.display()
+        )
+    })?;
+    eprintln!(
+        "gootodoo: migrated config {} -> {}",
+        legacy.display(),
+        dir.display()
+    );
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let dir = config_dir();
 
-    // The drain path owns its own exit code (non-zero if any line failed, even
-    // though the run itself "succeeded"); the others are plain success/failure.
-    if cli.command.is_none() {
-        return match drain(&dir, cli.drain.dry_run, cli.drain.no_reconcile) {
-            Ok(true) => ExitCode::SUCCESS,
-            Ok(false) => ExitCode::FAILURE, // per-line errors are already on stdout
-            Err(e) => {
-                eprintln!("gpush: {e:#}");
-                ExitCode::FAILURE
-            }
-        };
+    // Migrate a pre-rename ~/.config/gpush into place for any command that touches
+    // config — not the offline selftest. A FAILED migration aborts loudly: silently
+    // proceeding with an empty config would treat every existing key as new and
+    // duplicate every task.
+    if !matches!(cli.command, Some(Command::Selftest))
+        && let Err(e) = migrate_legacy_config(&dir)
+    {
+        eprintln!("gootodoo: {e:#}");
+        return ExitCode::FAILURE;
     }
 
-    let res = match cli.command.unwrap() {
-        Command::Selftest => selftest(),
-        Command::Auth => Auth::new(&dir).authorize(oauth::TASKS_SCOPE),
-        Command::Reconcile { list } => reconcile(&dir, list.as_deref()),
+    // Commands that process many items (drain, pull) own their exit code: success
+    // unless some item failed — its error is already on stdout, so we don't also
+    // print to stderr. The rest are plain ok/err, mapped onto the same `bool`.
+    let ran: Result<bool> = match cli.command {
+        None => drain(&dir, cli.drain.dry_run, cli.drain.no_reconcile),
+        Some(Command::Pull {
+            list,
+            completed_only,
+        }) => pull(&dir, list.as_deref(), completed_only),
+        Some(Command::Selftest) => selftest().map(|()| true),
+        Some(Command::Auth) => Auth::new(&dir).authorize(oauth::TASKS_SCOPE).map(|()| true),
+        Some(Command::Reconcile { list }) => reconcile(&dir, list.as_deref()).map(|()| true),
     };
-    match res {
-        Ok(()) => ExitCode::SUCCESS,
+    match ran {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
         Err(e) => {
-            eprintln!("gpush: {e:#}");
+            eprintln!("gootodoo: {e:#}");
             ExitCode::FAILURE
         }
     }
@@ -336,8 +398,89 @@ fn reconcile(dir: &Path, list_name: Option<&str>) -> Result<()> {
             },
         )
     }))?;
-    eprintln!("gpush: reconciled {n} tagged task(s) from list {list_id} into the idmap");
+    eprintln!("gootodoo: reconciled {n} tagged task(s) from list {list_id} into the idmap");
     Ok(())
+}
+
+/// Read-back: emit the current state of every managed task (one row per idmap key)
+/// as NDJSON. Idmap-driven so it's exactly one row per key — a mid-move orphan can
+/// never surface as a duplicate. Never writes to Google and never mutates the idmap
+/// (it may refresh the cached OAuth token). Like the drain, it processes every key:
+/// a task that fails to read becomes a `status:"error"` row and pull exits non-zero,
+/// rather than truncating the stream. Returns whether every row succeeded.
+fn pull(dir: &Path, list_name: Option<&str>, completed_only: bool) -> Result<bool> {
+    let map = IdMap::snapshot(dir);
+    let auth = Auth::new(dir);
+    auth.access_token()?;
+    let tasks = Tasks::new(auth);
+
+    // id <-> name, used for the output `list` field and the optional --list filter.
+    // Read-only: we look lists up here, never create one.
+    let lists = tasks.list_tasklists()?;
+    let name_of = |id: &str| -> String {
+        lists
+            .iter()
+            .find(|(lid, _)| lid == id)
+            .map(|(_, n)| n.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
+    let filter_id: Option<String> = match list_name {
+        Some(n) => Some(
+            lists
+                .iter()
+                .find(|(_, t)| t == n)
+                .map(|(id, _)| id.clone())
+                .ok_or_else(|| anyhow::anyhow!("no such task-list: {n:?}"))?,
+        ),
+        None => None,
+    };
+
+    // Deterministic output order (the HashMap isn't ordered): sort by key.
+    let mut entries: Vec<(&String, &Entry)> = map.iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    let mut all_ok = true;
+    for (key, entry) in entries {
+        if entry.target != "task" {
+            continue; // events aren't managed yet
+        }
+        if let Some(fid) = &filter_id
+            && &entry.list != fid
+        {
+            continue;
+        }
+        // A read failure becomes an error row (not an abort), so one transient
+        // hiccup can't make every task past it look absent to the reconciler.
+        let (status, completed_at, error) = match tasks.get_task(&entry.list, &entry.google_id) {
+            // 404 → the task is no longer at its managed (list, id): deleted, or
+            // (rarely, off-model) manually moved to another list. A single GET
+            // can't distinguish those — see PullRow docs.
+            Ok(None) => ("deleted".to_string(), None, None),
+            Ok(Some((st, c))) => (st, c, None),
+            Err(e) => {
+                all_ok = false;
+                ("error".to_string(), None, Some(format!("{e:#}")))
+            }
+        };
+        // --completed-only keeps only completed rows; error rows always pass so a
+        // failure is never silently swallowed.
+        if completed_only && status != "completed" && status != "error" {
+            continue;
+        }
+        let row = PullRow {
+            key: key.clone(),
+            google_id: entry.google_id.clone(),
+            status,
+            completed_at,
+            list: name_of(&entry.list),
+            error,
+        };
+        writeln!(out, "{}", serde_json::to_string(&row)?)?;
+    }
+    out.flush()?;
+    Ok(all_ok)
 }
 
 /// Deterministic, offline self-check exercised by the formula `test do` and CI.
@@ -394,6 +537,6 @@ fn selftest() -> Result<()> {
         anyhow::bail!("selftest: unparseable outcome shape wrong");
     }
 
-    println!("gpush selftest: OK");
+    println!("gootodoo selftest: OK");
     Ok(())
 }

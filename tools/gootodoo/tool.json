@@ -1,7 +1,7 @@
 {
-  "name": "gpush",
+  "name": "gootodoo",
   "lang": "rust",
-  "bin": "gpush",
+  "bin": "gootodoo",
   "desc": "Idempotently write Google Tasks and Calendar from NDJSON intents",
   "homepage": "https://github.com/orlenko/homebrew-tap",
   "license": "MIT",
