@@ -1,0 +1,10 @@
+{
+  "name": "gpush",
+  "lang": "rust",
+  "bin": "gpush",
+  "desc": "Idempotently write Google Tasks and Calendar from NDJSON intents",
+  "homepage": "https://github.com/orlenko/homebrew-tap",
+  "license": "MIT",
+  "targets": ["aarch64-apple-darwin"],
+  "test": "selftest"
+}
