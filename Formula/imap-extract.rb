@@ -3,8 +3,8 @@
 class ImapExtract < Formula
   desc "Watch an IMAP folder over IDLE and export new mail as Markdown"
   homepage "https://github.com/orlenko/homebrew-tap"
-  url "https://github.com/orlenko/homebrew-tap/releases/download/imap-extract-v0.1.1/imap-extract-aarch64-apple-darwin.tar.gz"
-  sha256 "e28c5839f289685edeae65cc0262ebd757c7e5306ff6cabf158ff2b5049389f8"
+  url "https://github.com/orlenko/homebrew-tap/releases/download/imap-extract-v0.1.2/imap-extract-aarch64-apple-darwin.tar.gz"
+  sha256 "cce9bbcdf7fb99c02f2057cf9b1ee07632867134bdb3aee2a55a299c892e5b50"
   license "MIT"
 
   def install
