@@ -51,6 +51,11 @@ struct WatchArgs {
     /// Sync once and exit (no live IDLE loop). Good for cron/scripts.
     #[arg(long)]
     once: bool,
+    /// Mark picked-up messages as read on the server (sets \Seen via RFC822).
+    /// The default leaves mail unread (BODY.PEEK) so a human still notices it.
+    /// Also enabled by IMAP_MARK_READ=true.
+    #[arg(long = "mark-read")]
+    mark_read: bool,
     /// Config file to read instead of ./.env (or $IMAP_EXTRACTOR_ENV).
     #[arg(long = "env-file", value_name = "PATH")]
     env_file: Option<PathBuf>,
@@ -83,6 +88,7 @@ struct Cfg {
     env_loaded: bool,
     tag: String,
     once: bool,
+    mark_read: bool,
 }
 
 fn cwd() -> PathBuf {
@@ -159,6 +165,7 @@ or set IMAP_FOLDER in this directory's .env{}.",
         env_loaded,
         tag,
         once: args.once,
+        mark_read: args.mark_read || config::get_bool("IMAP_MARK_READ", false),
     })
 }
 
@@ -178,6 +185,15 @@ fn print_config(cfg: &Cfg) {
     println!("  folder      : {}", cfg.folder);
     println!("  target dir  : {}", cfg.target_dir.display());
     println!("  state file  : {}", cfg.state_file.display());
+    println!(
+        "  mark read   : {} ({})",
+        cfg.mark_read,
+        if cfg.mark_read {
+            "RFC822 — messages marked read on fetch"
+        } else {
+            "BODY.PEEK — \\Seen left untouched (default)"
+        }
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -292,8 +308,24 @@ async fn connect(cfg: &Cfg) -> Result<ImapSession> {
 // ---------------------------------------------------------------------------
 // Sync
 // ---------------------------------------------------------------------------
-async fn fetch_source(session: &mut ImapSession, uid: u32) -> Result<Option<Vec<u8>>> {
-    let mut stream = session.uid_fetch(uid.to_string(), "RFC822").await?;
+/// The FETCH data item used to pull a whole message. The default `BODY.PEEK[]`
+/// returns the same bytes as `RFC822`/`BODY[]` but does *not* implicitly set the
+/// `\Seen` flag, so mail stays unread on the server (the norm — a human still
+/// notices it). `--mark-read` opts into `RFC822`, which sets `\Seen`. The server
+/// replies to both with a `section: None` body part, which `Fetch::body()`
+/// picks up either way.
+fn fetch_item(mark_read: bool) -> &'static str {
+    if mark_read { "RFC822" } else { "BODY.PEEK[]" }
+}
+
+async fn fetch_source(
+    session: &mut ImapSession,
+    uid: u32,
+    mark_read: bool,
+) -> Result<Option<Vec<u8>>> {
+    let mut stream = session
+        .uid_fetch(uid.to_string(), fetch_item(mark_read))
+        .await?;
     let mut body: Option<Vec<u8>> = None;
     // Drain the whole stream (including the tagged completion) so the next
     // command doesn't read stale data; keep the first body part.
@@ -353,7 +385,7 @@ async fn sync(session: &mut ImapSession, cfg: &Cfg, log: &Logger) -> Result<()> 
 
     for uid in uids {
         log.info(&format!("Fetching message UID {uid}..."));
-        if let Some(source) = fetch_source(session, uid).await? {
+        if let Some(source) = fetch_source(session, uid, cfg.mark_read).await? {
             process_message(&source, &cfg.target_dir, uid, log).await?;
         }
         // Persist immediately after a successful write so a crash never re-dumps.
@@ -708,6 +740,14 @@ on November 18th, 2024";
     fn sanitize_replaces_illegal_chars() {
         assert_eq!(sanitize_filename("a/b:c?.txt"), "a_b_c_.txt");
         assert_eq!(sanitize_filename("clean.pdf"), "clean.pdf");
+    }
+
+    #[test]
+    fn fetch_item_defaults_to_peek_and_marks_read_on_request() {
+        // Default (mark_read=false) must PEEK so \Seen stays unset;
+        // --mark-read opts into RFC822, which sets \Seen.
+        assert_eq!(fetch_item(false), "BODY.PEEK[]");
+        assert_eq!(fetch_item(true), "RFC822");
     }
 
     #[test]

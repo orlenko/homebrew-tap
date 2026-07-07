@@ -38,6 +38,7 @@ imap-extract [folder] [target-dir] [options]
 | Option | Effect |
 | --- | --- |
 | `--once` | Sync once and exit (no live IDLE loop). Good for cron. |
+| `--mark-read` | Mark messages read on the server (`RFC822`, sets `\Seen`). By default mail is left unread (`BODY.PEEK`) so a human still notices it. Also enabled by `IMAP_MARK_READ=true`. |
 | `--env-file <path>` | Read config from a specific file instead of `./.env`. |
 | `--print-config` | Print the resolved server/folder/target/state paths and exit. |
 | `selftest` | Run a no-network self-check and exit. |
