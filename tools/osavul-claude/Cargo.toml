@@ -1,0 +1,16 @@
+[package]
+name = "osavul-claude"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Run safe-claude with the osavul spool granted"
+
+[[bin]]
+name = "osavul-claude"
+path = "src/main.rs"
+
+# Deliberately dependency-free: the whole job is "set one env var, exec".
+[dependencies]
