@@ -16,9 +16,6 @@ That auto-taps `orlenko/tap` and installs. (Or `brew tap orlenko/tap` first.)
 | Tool | What it does |
 | --- | --- |
 | [`imap-extract`](tools/imap-extract) | Watch an IMAP folder over IDLE and export new mail as Markdown |
-| [`gootodoo`](tools/gootodoo) | Idempotently write Google Tasks and Calendar from NDJSON intents |
-| [`osavul-claude`](tools/osavul-claude) | Run safe-claude with the osavul spool granted (needs urban-sky/tap/safe-claude) |
-| [`osavul-codex`](tools/osavul-codex) | Run safe-codex with the osavul spool granted (needs urban-sky/tap/safe-codex) |
 
 ## How it works
 
