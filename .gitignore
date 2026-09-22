@@ -17,3 +17,8 @@
 **/.env
 state.json
 **/state.json
+
+# Machine-local: guardian agents' memory, reference copies of other projects
+.claude/agent-memory/
+**/.claude/agent-memory/
+/reference/
