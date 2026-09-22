@@ -153,3 +153,7 @@ but only when you run it.
   (`.env`) someone copied in, which are not recoverable.
 - **Package-manager caches.** `brew` cleans itself every 30 days; `npm cache
   verify` frees next to nothing.
+- **Agent session logs.** Not regenerable, so not nightly. For a one-off,
+  `scripts/archive-agent-logs` packs Claude Code and Codex session data older
+  than 7 days into one `.tar.zst` for cold storage and deletes the originals,
+  plus superseded Codex CLI releases. Dry run by default, `--apply` to do it.

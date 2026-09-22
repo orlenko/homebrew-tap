@@ -1,0 +1,74 @@
+#!/bin/sh
+# archive-agent-logs — one-time: pack Claude Code and Codex session data older
+# than N days into one tarball for cold storage, then delete the originals.
+# Also deletes superseded Codex CLI releases (no archive; they are re-downloaded).
+#
+#   archive-agent-logs            dry run: list what would go and the sizes
+#   archive-agent-logs --apply    do it
+#   DAYS=14 archive-agent-logs    change the age threshold (default 7)
+#   CODEC=bzip2 archive-agent-logs --apply   bzip2 instead of zstd (measured on
+#                                            these logs: bzip2 1.8x, xz 4.3x,
+#                                            zstd -19 5.8x, and zstd is fastest)
+#
+# Kept untouched: ~/.claude/projects/*/memory, anything newer than N days, both
+# Codex sqlite DBs (in use), the current Codex release, ~/.claude/history.jsonl.
+# After this, `claude --resume` and `codex resume` will not list the archived
+# sessions; restore by extracting the tarball into ~.
+set -eu
+
+DAYS="${DAYS:-7}"
+CODEC="${CODEC:-zstd}"
+OUT="${OUT:-$HOME/agent-logs-$(date +%Y%m%d).tar}"
+apply=0; [ "${1:-}" = "--apply" ] && apply=1
+cd "$HOME"
+
+# 1. Session data to archive: files, relative to $HOME, older than DAYS.
+list=$(mktemp)
+{
+  # Claude Code: session transcripts and their tool-results/subagent dirs.
+  # `memory/` is excluded outright, whatever its age.
+  find .claude/projects -type f -mtime +"$DAYS" -not -path '*/memory/*'
+  find .claude/file-history -type f -mtime +"$DAYS" 2>/dev/null || true
+  # Codex TUI rollouts and archived sessions.
+  find .codex/sessions .codex/archived_sessions -type f -mtime +"$DAYS" 2>/dev/null || true
+  # Claude desktop local agent sessions.
+  find "Library/Application Support/Claude/local-agent-mode-sessions" -type f -mtime +"$DAYS" 2>/dev/null || true
+} | sort > "$list"
+
+# 2. Superseded Codex CLI releases: everything `current` does not point at.
+rel=.codex/packages/standalone/releases
+cur=$(readlink .codex/packages/standalone/current 2>/dev/null | xargs -n1 basename 2>/dev/null || true)
+old_releases=$(ls "$rel" 2>/dev/null | grep -v -x "$cur" || true)
+
+n=$(wc -l < "$list" | tr -d ' ')
+bytes=$(tr '\n' '\0' < "$list" | xargs -0 du -k 2>/dev/null | awk '{s+=$1} END{print s+0}')
+rbytes=$(for r in $old_releases; do du -sk "$rel/$r"; done | awk '{s+=$1} END{print s+0}')
+
+printf 'archive: %s files, %.2f GB, older than %s days\n' "$n" "$(echo "$bytes/1048576" | bc -l)" "$DAYS"
+awk -F/ '{print $1"/"$2}' "$list" | sort | uniq -c | sort -rn | sed 's/^/   /'
+printf 'delete:  %s superseded Codex releases, %.2f GB (current: %s)\n' \
+  "$(echo "$old_releases" | grep -c . || true)" "$(echo "$rbytes/1048576" | bc -l)" "${cur:-?}"
+
+if [ "$apply" -ne 1 ]; then
+  echo; echo "dry run. Rerun with --apply to write $OUT.<zst|xz|bz2> and delete the originals."
+  rm -f "$list"; exit 0
+fi
+
+# 3. Pack, verify, then delete. --null/-T reads the list, so odd names survive.
+case "$CODEC" in
+  zstd)  ext=zst; pack() { zstd -19 -T0 -q "$1" && rm "$1"; } ;;
+  xz)    ext=xz;  pack() { xz -T0 -6 "$1"; } ;;
+  bzip2) ext=bz2; pack() { bzip2 -9 "$1"; } ;;
+  *) echo "CODEC must be zstd, xz or bzip2"; exit 2 ;;
+esac
+[ -e "$OUT" ] || [ -e "$OUT.$ext" ] && { echo "$OUT(.$ext) exists, refusing to overwrite"; exit 2; }
+tr '\n' '\0' < "$list" | tar -cf "$OUT" --null -T -
+pack "$OUT"
+tar -tf "$OUT.$ext" > /dev/null   # readable back, or nothing gets deleted
+tr '\n' '\0' < "$list" | xargs -0 rm -f
+# Drop directories emptied by the above (Claude uuid dirs, Codex day dirs).
+find .claude/projects .codex/sessions -mindepth 1 -type d -empty -delete 2>/dev/null || true
+for r in $old_releases; do rm -rf "$rel/$r"; done
+rm -f "$list"
+ls -la "$OUT.$ext"
+echo "done. Move $OUT.$ext to gdrive, then it is safe to delete locally."
