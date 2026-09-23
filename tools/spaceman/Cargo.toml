@@ -1,13 +1,13 @@
 [package]
 name = "spaceman"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version = "1.89"
 license.workspace = true
 authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "Delete stale, regenerable build directories from idle git checkouts"
+description = "Clean up idle build dirs, stale Docker objects and old browser caches"
 
 [[bin]]
 name = "spaceman"
@@ -16,4 +16,5 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+libc = "0.2"
 serde_json = "1"

@@ -2,7 +2,7 @@
   "name": "spaceman",
   "lang": "rust",
   "bin": "spaceman",
-  "desc": "Delete stale, regenerable build directories from idle git checkouts",
+  "desc": "Clean up idle build dirs, stale Docker objects and old browser caches",
   "homepage": "https://github.com/orlenko/homebrew-tap",
   "license": "MIT",
   "targets": ["aarch64-apple-darwin"],

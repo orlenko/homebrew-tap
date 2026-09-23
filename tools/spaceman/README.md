@@ -2,7 +2,9 @@
 
 Deletes stale, regenerable build directories (`node_modules`, `.next`, `.turbo`,
 Cargo `target`, Python venvs) from git checkouts nobody has touched for a week.
-Meant to run unattended once a night.
+With `--docker` it also removes long-unused Docker containers, images, build
+cache and dangling anonymous volumes; with `--caches`, old Chrome/Chromium
+disk-cache entries. Meant to run unattended once a night.
 
 Install:
 
@@ -19,6 +21,8 @@ spaceman run                  # delete, and append each deletion to the ledger
 spaceman run --days 14        # idle threshold (default 7)
 spaceman scan --root ~/code --root ~/work
 spaceman run --docker --caches   # also clean Docker and the Chrome disk cache
+spaceman log                  # one line per past run (last 10; -n N for more)
+spaceman log -v               # ... and every removal in each run
 ```
 
 Roots come from `--root`, or from `~/.config/spaceman/roots` (one directory per
@@ -26,7 +30,13 @@ line, `~/` and `#` comments allowed). **With no roots configured spaceman does
 nothing.** There is no default that walks your home directory.
 
 Every deletion is appended to `~/.local/state/spaceman/ledger.jsonl`
-(`ts`, `kind`, `path`, `bytes`, `idle_days`). The ledger is a record, not an undo.
+(`ts`, `kind`, `path`, `bytes`, `idle_days`), and a `run` that gets through
+planning ends with one `"kind":"run"` line (`started`, `failed`, and `refused`
+when `--max-items` stopped it), so a run that deleted nothing is still on
+record; one that failed before planning (no roots, lock held) is not.
+`spaceman log` reads it back in local time (the ledger is UTC). Its "freed"
+leaves out Docker: image sizes include layers other images still share. The
+ledger is a record, not an undo.
 
 ## What has to be true before a directory is deleted
 
@@ -96,9 +106,16 @@ expand `~`, so write your home directory out, and `mkdir -p
 ~/.local/state/spaceman` first. The log lists project paths, which is why it
 does not go to `/tmp`.
 
-Linux: `30 3 * * * spaceman run >> ~/.local/state/spaceman/cron.log 2>&1`
-(needs `git`, `lsof` and `ps`). The tap ships an arm64 macOS binary only; build from
-source elsewhere.
+Linux: build from source (the tap ships an arm64 macOS binary only) with
+`cargo install --locked --path tools/spaceman` from a clone of this repo, then
+`mkdir -p ~/.local/state/spaceman` and add a crontab line. cron's `PATH` does
+not include `~/.cargo/bin`, so write the binary's path out:
+
+```
+30 3 * * * $HOME/.cargo/bin/spaceman run >> $HOME/.local/state/spaceman/cron.log 2>&1
+```
+
+It needs `git`, `lsof` and `ps` on cron's `PATH` (`/usr/bin:/bin`).
 
 ## `--docker`
 

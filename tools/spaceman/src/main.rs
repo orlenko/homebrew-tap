@@ -1,7 +1,9 @@
-//! spaceman — reclaim disk from stale, regenerable build directories.
+//! spaceman — reclaim disk from stale, regenerable build directories, and on
+//! request from Docker (`--docker`, docker.rs) and the Chrome disk cache
+//! (`--caches`, caches.rs).
 //!
-//! One collector, on purpose: `node_modules`, `.next`, `.turbo`, Cargo `target`
-//! and Python venvs inside git checkouts. A directory is deleted only when every
+//! The default collector: `node_modules`, `.next`, `.turbo`, Cargo `target` and
+//! Python venvs inside git checkouts. A directory is deleted only when every
 //! gate holds, and every gate fails closed:
 //!
 //! 1. it sits inside a git checkout found under a configured root;
@@ -13,7 +15,8 @@
 //! 5. git says the directory is ignored and holds no tracked files.
 //!
 //! `scan` (the default) only reports. `run` deletes and appends every deletion to
-//! a JSONL ledger. There is no scheduler subcommand and no default root: with no
+//! a JSONL ledger, closed by a `"kind":"run"` record once the run gets through
+//! planning; `log` reads it back (history.rs). There is no scheduler subcommand and no default root: with no
 //! roots configured the tool does nothing. See README.md for a launchd snippet.
 
 use anyhow::{Context, Result, bail};
@@ -30,6 +33,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod caches;
 mod docker;
+mod history;
 
 /// Directory names treated as regenerable. Adding one here is a decision about
 /// deleting people's files unattended — it needs a marker or a git gate that
@@ -71,8 +75,17 @@ enum Cmd {
         #[arg(long)]
         all: bool,
     },
-    /// Delete every eligible directory and record it in the ledger
+    /// Delete what `scan` reports and record each removal in the ledger
     Run,
+    /// Show past runs from ~/.local/state/spaceman/ledger.jsonl
+    Log {
+        /// How many of the most recent runs to show
+        #[arg(short = 'n', long, default_value_t = 10, value_parser = clap::value_parser!(u64).range(1..))]
+        last: u64,
+        /// Also list every removal in each run
+        #[arg(short, long)]
+        verbose: bool,
+    },
     /// Exercise the gates against a throwaway tree (used by `brew test`)
     Selftest,
 }
@@ -545,6 +558,27 @@ fn execute(
     Ok((freed, failed))
 }
 
+/// The last ledger line of a `run` that got through planning, written even when
+/// nothing was deleted, so `log` can tell a quiet night from a night that never
+/// ran. Runs that fail earlier (no roots, lock held) leave no line.
+fn record_run(
+    log: &mut File,
+    started: SystemTime,
+    failed: usize,
+    refused: Option<&str>,
+) -> Result<()> {
+    let mut entry = serde_json::json!({
+        "ts": rfc3339(SystemTime::now()),
+        "kind": "run",
+        "started": rfc3339(started),
+        "failed": failed,
+    });
+    if let Some(why) = refused {
+        entry["refused"] = why.into();
+    }
+    writeln!(log, "{entry}").context("write ledger")
+}
+
 fn open_ledger(path: &Path) -> Result<File> {
     OpenOptions::new()
         .create(true)
@@ -693,6 +727,11 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let all = match cli.cmd {
         Some(Cmd::Selftest) => return selftest(),
+        Some(Cmd::Log { last, verbose }) => {
+            let ledger = xdg("XDG_STATE_HOME", ".local/state")?.join("ledger.jsonl");
+            let last = usize::try_from(last).unwrap_or(usize::MAX);
+            return history::show(&ledger, last, verbose);
+        }
         Some(Cmd::Scan { all }) => all,
         _ => false,
     };
@@ -772,11 +811,15 @@ fn main() -> Result<()> {
         _ => 0,
     };
     if eligible > cli.max_items || docker_items > cli.max_items {
-        bail!(
+        let why = format!(
             "{eligible} directories and {docker_items} docker objects are eligible, more \
-             than --max-items {}. Nothing was deleted. Read `spaceman scan`, then rerun \
-             with a higher --max-items.",
+             than --max-items {}",
             cli.max_items
+        );
+        record_run(&mut open_ledger(&ledger)?, now, 0, Some(&why))?;
+        bail!(
+            "{why}. Nothing was deleted. Read `spaceman scan`, then rerun with a higher \
+             --max-items."
         );
     }
     if !roots.is_empty() {
@@ -815,6 +858,7 @@ fn main() -> Result<()> {
         }
         None => {}
     }
+    record_run(&mut log, now, failed, None)?;
     if failed > 0 {
         bail!("{failed} problems, see the lines above");
     }
