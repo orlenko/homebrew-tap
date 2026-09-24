@@ -7,6 +7,9 @@ class ImapExtract < Formula
   sha256 "cce9bbcdf7fb99c02f2057cf9b1ee07632867134bdb3aee2a55a299c892e5b50"
   license "MIT"
 
+  depends_on arch: :arm64
+  depends_on :macos
+
   def install
     bin.install "imap-extract"
   end

@@ -7,6 +7,9 @@ class Spaceman < Formula
   sha256 "57c0348c94e5628bb5cd697619f46cc34464786122a2b14fe86b87bd14bb49c9"
   license "MIT"
 
+  depends_on arch: :arm64
+  depends_on :macos
+
   def install
     bin.install "spaceman"
   end

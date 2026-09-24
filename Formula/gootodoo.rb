@@ -7,6 +7,9 @@ class Gootodoo < Formula
   sha256 "040c5959d3d9a20b8a335bf632d651cabf5f823696d615409f2e798464197489"
   license "MIT"
 
+  depends_on arch: :arm64
+  depends_on :macos
+
   def install
     bin.install "gootodoo"
   end
