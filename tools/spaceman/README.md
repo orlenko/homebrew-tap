@@ -12,6 +12,31 @@ Install:
 brew install orlenko/tap/spaceman
 ```
 
+The binary is macOS on Apple silicon only; on Linux, see [Scheduling](#scheduling).
+
+## First run
+
+1. List the trees to search, one per line (`$XDG_CONFIG_HOME/spaceman/roots` if
+   you set that variable). Without roots, `--root` or `--docker`/`--caches`,
+   spaceman does nothing:
+
+   ```bash
+   mkdir -p ~/.config/spaceman
+   echo '~/code' >> ~/.config/spaceman/roots
+   ```
+
+2. `spaceman scan --all` and read it. Anything you would miss, protect with a
+   `.spaceman-keep` file in that checkout's top directory.
+3. `spaceman run` once while you watch. The first run clears the backlog and
+   is the big one. If more than 200 directories (or, separately, 200 Docker
+   objects) are eligible it refuses; read the scan, then pass `--max-items`.
+   `spaceman log` shows the result.
+4. Schedule it (below). Before adding `--docker`, run `spaceman scan --docker`:
+   containers stopped longer than `--days` (with their anonymous volumes) and
+   unused build cache go on the first run. Images and dangling volumes wait
+   `--days` from the first scan or run, because spaceman keeps its own clock
+   for them.
+
 ## Usage
 
 ```bash
