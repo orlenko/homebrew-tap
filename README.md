@@ -17,6 +17,20 @@ That auto-taps `orlenko/tap` and installs. (Or `brew tap orlenko/tap` first.)
 | --- | --- |
 | [`imap-extract`](tools/imap-extract) | Watch an IMAP folder over IDLE and export new mail as Markdown |
 
+## Apps
+
+| Cask | What it is |
+| --- | --- |
+| [`voiceislocal`](Casks/voiceislocal.rb) | [Voice is Local](https://voiceislocal.com/): on-device dictation, meeting transcription and reading aloud (macOS 27, Apple Silicon) |
+
+```bash
+brew install --cask orlenko/tap/voiceislocal
+```
+
+Casks are written by hand, not generated: each app is built and signed in its own repo
+([orlenko/holos](https://github.com/orlenko/holos) for Voice is Local), and a release updates the cask's `version`
+and `sha256`.
+
 ## How it works
 
 - **Rust by default.** Tools live in `tools/<name>/` as Cargo workspace members,
