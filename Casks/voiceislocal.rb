@@ -1,6 +1,6 @@
 cask "voiceislocal" do
-  version "1.0.0"
-  sha256 "8c200a04b0753dfa3b20409c450a152c9cdcc7fc74b3a69775e57af2551065c8"
+  version "1.0.2"
+  sha256 "813251c07b07938bd4761d0654d512f8c531dc6e60b2af2e9a18ccef4c48047e"
 
   url "https://voiceislocal.com/downloads/VoiceIsLocal-#{version}.dmg"
   name "Voice is Local"
@@ -12,6 +12,7 @@ cask "voiceislocal" do
     regex(/VoiceIsLocal[._-]v?(\d+(?:\.\d+)+)\.dmg/i)
   end
 
+  auto_updates true
   depends_on arch: :arm64
   depends_on macos: :golden_gate
 
