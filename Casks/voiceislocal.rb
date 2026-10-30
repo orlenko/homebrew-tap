@@ -1,6 +1,6 @@
 cask "voiceislocal" do
-  version "1.0.2"
-  sha256 "813251c07b07938bd4761d0654d512f8c531dc6e60b2af2e9a18ccef4c48047e"
+  version "1.0.4"
+  sha256 "5f777ec79513c4eec0856e31aeada10945fd6ccaaca994fb83f34b6b04f93fa9"
 
   url "https://voiceislocal.com/downloads/VoiceIsLocal-#{version}.dmg"
   name "Voice is Local"
